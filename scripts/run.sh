@@ -1,6 +1,4 @@
-docker build -t babysdcs:latest .
-
-docker network create baby-net 2>/dev/null || true
+docker stop server1 server2 server3 2>/dev/null || true
 
 docker run -d --name server1 --network baby-net -p 9527:8001 \
   -e PEERS="server1:8001,server2:8002,server3:8003" \

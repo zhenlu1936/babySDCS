@@ -23,11 +23,11 @@ COPY . /app
 RUN /usr/local/cargo/bin/cargo build --release
 
 FROM ubuntu:20.04 AS runtime
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY --from=builder /app/target/release/babySDCS /app/babySDCS
+COPY --from=builder /app/target/release/baby_sdcs /app/baby_sdcs
 
 EXPOSE 8001 8002 8003
 
 ENV RUST_LOG=info
-ENTRYPOINT ["/app/babySDCS"]
+ENTRYPOINT ["/app/baby_sdcs"]

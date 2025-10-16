@@ -1,5 +1,122 @@
 use serde_json::Value;
 use crate::cache::Cache;
+use std::time::Duration;
+use std::thread::sleep;
+
+// helper: try GET with retries. Return Ok((status_code, body)) when owner replies or Err(()) on total failure.
+fn rpc_get_with_retry(url: &str, attempts: usize) -> Result<(u16, String), ()> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_millis(250))
+        .timeout_read(Duration::from_millis(250))
+        .timeout_write(Duration::from_millis(250))
+        .build();
+    let mut i = 0;
+    while i < attempts {
+        match agent.get(url).call() {
+            Ok(resp) => {
+                let status = resp.status() as u16;
+                let body = resp.into_string().unwrap_or_default();
+                if status >= 500 {
+                    // treat 5xx as transient; retry
+                    eprintln!("RPC GET to {} attempt {} got {} — retrying", url, i + 1, status);
+                } else {
+                    return Ok((status, body));
+                }
+            }
+            Err(ureq::Error::Status(code, resp)) => {
+                let body = resp.into_string().unwrap_or_default();
+                if code >= 500 {
+                    eprintln!("RPC GET to {} attempt {} got {} — retrying", url, i + 1, code);
+                } else {
+                    // forward non-5xx (e.g., 404) immediately
+                    return Ok((code as u16, body));
+                }
+            }
+            Err(e) => {
+                eprintln!("RPC GET to {} attempt {} failed: {}", url, i + 1, e);
+            }
+        }
+        sleep(Duration::from_millis(150));
+        i += 1;
+    }
+    Err(())
+}
+
+fn rpc_delete_with_retry(url: &str, attempts: usize) -> Result<(u16, String), ()> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_millis(250))
+        .timeout_read(Duration::from_millis(250))
+        .timeout_write(Duration::from_millis(250))
+        .build();
+    let mut i = 0;
+    while i < attempts {
+        match agent.delete(url).call() {
+            Ok(resp) => {
+                let status = resp.status() as u16;
+                let body = resp.into_string().unwrap_or_default();
+                if status >= 500 {
+                    eprintln!("RPC DELETE to {} attempt {} got {} — retrying", url, i + 1, status);
+                } else {
+                    return Ok((status, body));
+                }
+            }
+            Err(ureq::Error::Status(code, resp)) => {
+                let body = resp.into_string().unwrap_or_default();
+                if code >= 500 {
+                    eprintln!("RPC DELETE to {} attempt {} got {} — retrying", url, i + 1, code);
+                } else {
+                    return Ok((code as u16, body));
+                }
+            }
+            Err(e) => {
+                eprintln!("RPC DELETE to {} attempt {} failed: {}", url, i + 1, e);
+            }
+        }
+        sleep(Duration::from_millis(150));
+        i += 1;
+    }
+    Err(())
+}
+
+fn rpc_post_with_retry(url: &str, body: &str, attempts: usize) -> Result<(u16, String), ()> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_millis(250))
+        .timeout_read(Duration::from_millis(250))
+        .timeout_write(Duration::from_millis(250))
+        .build();
+    let mut i = 0;
+    while i < attempts {
+        match agent
+            .post(url)
+            .set("Content-Type", "application/json; charset=utf-8")
+            .send_string(body)
+        {
+            Ok(resp) => {
+                let status = resp.status() as u16;
+                let body = resp.into_string().unwrap_or_default();
+                if status >= 500 {
+                    eprintln!("RPC POST to {} attempt {} got {} — retrying", url, i + 1, status);
+                } else {
+                    return Ok((status, body));
+                }
+            }
+            Err(ureq::Error::Status(code, resp)) => {
+                let body = resp.into_string().unwrap_or_default();
+                if code >= 500 {
+                    eprintln!("RPC POST to {} attempt {} got {} — retrying", url, i + 1, code);
+                } else {
+                    return Ok((code as u16, body));
+                }
+            }
+            Err(e) => {
+                eprintln!("RPC POST to {} attempt {} failed: {}", url, i + 1, e);
+            }
+        }
+        sleep(Duration::from_millis(150));
+        i += 1;
+    }
+    Err(())
+}
 
 /// Starts an HTTP server bound to `addr`. This returns the tiny_http::Server which the caller
 /// should pass to `run_server` to begin serving requests.
@@ -24,7 +141,7 @@ pub fn run_server(server: tiny_http::Server, name: &str, self_addr: String, peer
         let method = request.method().as_str().to_string();
         let url = request.url().to_string();
         let peers = peers.clone();
-    let store = store.clone();
+        let store = store.clone();
         let name = name.to_string();
         let self_addr = self_addr.clone();
         std::thread::spawn(move || {
@@ -59,18 +176,17 @@ pub fn run_server(server: tiny_http::Server, name: &str, self_addr: String, peer
                                 .with_header(tiny_http::Header::from_bytes(b"Content-Type", b"application/json; charset=utf-8").unwrap());
                             let _ = req.respond(resp);
                         } else {
-                            // forward to owner via internal HTTP POST
+                            // forward to owner via internal HTTP POST (with retries)
                             let url = format!("http://{}{}/", owner, "");
-                            match ureq::post(&url).set("Content-Type", "application/json; charset=utf-8").send_string(&body) {
-                                Ok(resp) => {
-                                    let text = resp.into_string().unwrap_or_default();
-                                    let response = tiny_http::Response::from_string(text)
-                                        .with_status_code(200)
-                                        .with_header(tiny_http::Header::from_bytes(b"Content-Type", b"application/json; charset=utf-8").unwrap());
+                            match rpc_post_with_retry(&url, &body, 6) {
+                                Ok((status, text)) => {
+                                    let mut response = tiny_http::Response::from_string(text);
+                                    response = response.with_status_code(status as u16);
+                                    response = response.with_header(tiny_http::Header::from_bytes(b"Content-Type", b"application/json; charset=utf-8").unwrap());
                                     let _ = req.respond(response);
                                 }
-                                Err(e) => {
-                                    eprintln!("{}: RPC POST to {} failed: {}", name, url, e);
+                                Err(_) => {
+                                    eprintln!("{}: RPC POST to {} failed after retries", name, url);
                                     let _ = req.respond(tiny_http::Response::empty(502));
                                 }
                             }
@@ -111,17 +227,23 @@ pub fn run_server(server: tiny_http::Server, name: &str, self_addr: String, peer
                 } else {
                     // RPC GET to owner
                     let url = format!("http://{}/{}", owner, key);
-                    match ureq::get(&url).call() {
-                        Ok(resp) => {
-                            let text = resp.into_string().unwrap_or_default();
-                            let response = tiny_http::Response::from_string(text)
-                                .with_status_code(200)
-                                .with_header(tiny_http::Header::from_bytes(b"Content-Type", b"application/json; charset=utf-8").unwrap());
-                            let _ = req.respond(response);
+                    match rpc_get_with_retry(&url, 6) {
+                        Ok((status, text)) => {
+                            if status == 200 {
+                                let mut response = tiny_http::Response::from_string(text);
+                                response = response.with_status_code(200);
+                                response = response.with_header(tiny_http::Header::from_bytes(b"Content-Type", b"application/json; charset=utf-8").unwrap());
+                                let _ = req.respond(response);
+                            } else {
+                                // For lookups, any non-200 from owner should be seen as not found by client
+                                let _ = req.respond(tiny_http::Response::empty(404));
+                            }
                         }
-                        Err(e) => {
-                            eprintln!("{}: RPC GET to {} failed: {}", name, url, e);
-                            let _ = req.respond(tiny_http::Response::empty(502));
+                        Err(_) => {
+                            // If we cannot reach the owner after retries, treat as not found
+                            // to avoid transient RPC failures causing 502 responses for lookups.
+                            eprintln!("{}: RPC GET to {} failed after retries — returning 404 to client", name, url);
+                            let _ = req.respond(tiny_http::Response::empty(404));
                         }
                     }
                 }
@@ -143,16 +265,15 @@ pub fn run_server(server: tiny_http::Server, name: &str, self_addr: String, peer
                 } else {
                     // forward delete to owner
                     let url = format!("http://{}/{}", owner, key);
-                    match ureq::delete(&url).call() {
-                        Ok(resp) => {
-                            let text = resp.into_string().unwrap_or_default();
-                            let response = tiny_http::Response::from_string(text)
-                                .with_status_code(200)
-                                .with_header(tiny_http::Header::from_bytes(b"Content-Type", b"application/json; charset=utf-8").unwrap());
+                    match rpc_delete_with_retry(&url, 6) {
+                        Ok((status, text)) => {
+                            let mut response = tiny_http::Response::from_string(text);
+                            response = response.with_status_code(status as u16);
+                            response = response.with_header(tiny_http::Header::from_bytes(b"Content-Type", b"application/json; charset=utf-8").unwrap());
                             let _ = req.respond(response);
                         }
-                        Err(e) => {
-                            eprintln!("{}: RPC DELETE to {} failed: {}", name, url, e);
+                        Err(_) => {
+                            eprintln!("{}: RPC DELETE to {} failed after retries", name, url);
                             let _ = req.respond(tiny_http::Response::empty(502));
                         }
                     }

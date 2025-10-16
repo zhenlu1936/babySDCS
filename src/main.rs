@@ -1,4 +1,4 @@
-use babySDCS::server;
+use baby_sdcs::server;
 use std::env;
 
 fn main() {
