@@ -1,15 +1,11 @@
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-
 use serde_json::Value;
-
-type Store = Arc<Mutex<HashMap<String, Value>>>;
+use crate::cache::Cache;
 
 /// Starts an HTTP server bound to `addr`. This returns the tiny_http::Server which the caller
 /// should pass to `run_server` to begin serving requests.
-pub fn init_server(_name: &str, addr: &str) -> (tiny_http::Server, Store) {
+pub fn init_server(_name: &str, addr: &str) -> (tiny_http::Server, Cache) {
     let server = tiny_http::Server::http(addr).expect(&format!("failed to bind {}", addr));
-    let store: Store = Arc::new(Mutex::new(HashMap::new()));
+    let store = Cache::new();
     println!("listening on http://{}", addr);
     (server, store)
 }
@@ -22,13 +18,13 @@ fn owner_for_key(key: &str, peers: &[String]) -> usize {
 
 /// Run the server loop. `name` is the server name (for logs), `peers` is the ordered list of peer base URLs
 /// (including self) used for owner selection and internal RPC. `store` is the in-memory key-value store.
-pub fn run_server(server: tiny_http::Server, name: &str, self_addr: String, peers: Vec<String>, store: Store) {
+pub fn run_server(server: tiny_http::Server, name: &str, self_addr: String, peers: Vec<String>, store: Cache) {
     println!("{} running on {} with peers: {:?}", name, self_addr, peers);
     for request in server.incoming_requests() {
         let method = request.method().as_str().to_string();
         let url = request.url().to_string();
         let peers = peers.clone();
-        let store = store.clone();
+    let store = store.clone();
         let name = name.to_string();
         let self_addr = self_addr.clone();
         std::thread::spawn(move || {
@@ -57,7 +53,7 @@ pub fn run_server(server: tiny_http::Server, name: &str, self_addr: String, peer
                         let owner = &peers[owner_idx];
                         if owner == &self_addr {
                             // store locally
-                            store.lock().unwrap().insert(k.clone(), v.clone());
+                            store.set(k.clone(), v.clone());
                             let resp = tiny_http::Response::from_string(serde_json::to_string(&serde_json::json!({k: v})).unwrap())
                                 .with_status_code(200)
                                 .with_header(tiny_http::Header::from_bytes(b"Content-Type", b"application/json; charset=utf-8").unwrap());
@@ -103,8 +99,7 @@ pub fn run_server(server: tiny_http::Server, name: &str, self_addr: String, peer
                 let owner = &peers[owner_idx];
                 if owner == &self_addr {
                     // local
-                    let guard = store.lock().unwrap();
-                    if let Some(v) = guard.get(key) {
+                    if let Some(v) = store.get(key) {
                         let body = serde_json::to_string(&serde_json::json!({key: v})).unwrap();
                         let resp = tiny_http::Response::from_string(body)
                             .with_status_code(200)
@@ -140,8 +135,7 @@ pub fn run_server(server: tiny_http::Server, name: &str, self_addr: String, peer
                 let owner = &peers[owner_idx];
                 if owner == &self_addr {
                     // local delete
-                    let mut guard = store.lock().unwrap();
-                    let removed = if guard.remove(key).is_some() { 1 } else { 0 };
+                    let removed = store.delete(key);
                     let resp = tiny_http::Response::from_string(format!("{}", removed))
                         .with_status_code(200)
                         .with_header(tiny_http::Header::from_bytes(b"Content-Type", b"application/json; charset=utf-8").unwrap());
