@@ -4,13 +4,15 @@ use std::time::Duration;
 use std::thread::sleep;
 
 // helper: try GET with retries. Return Ok((status_code, body)) when owner replies or Err(()) on total failure.
-fn rpc_get_with_retry(url: &str, attempts: usize) -> Result<(u16, String), ()> {
+fn rpc_get_with_retry(url: &str) -> Result<(u16, String), ()> {
     let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_millis(250))
-        .timeout_read(Duration::from_millis(250))
-        .timeout_write(Duration::from_millis(250))
+        .timeout_connect(Duration::from_millis(100))
+        .timeout_read(Duration::from_millis(100))
+        .timeout_write(Duration::from_millis(100))
         .build();
     let mut i = 0;
+    let attempts = 1;
+
     while i < attempts {
         match agent.get(url).call() {
             Ok(resp) => {
@@ -36,19 +38,21 @@ fn rpc_get_with_retry(url: &str, attempts: usize) -> Result<(u16, String), ()> {
                 eprintln!("RPC GET to {} attempt {} failed: {}", url, i + 1, e);
             }
         }
-        sleep(Duration::from_millis(150));
+        sleep(Duration::from_millis(50));
         i += 1;
     }
     Err(())
 }
 
-fn rpc_delete_with_retry(url: &str, attempts: usize) -> Result<(u16, String), ()> {
+fn rpc_delete_with_retry(url: &str) -> Result<(u16, String), ()> {
     let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_millis(250))
-        .timeout_read(Duration::from_millis(250))
-        .timeout_write(Duration::from_millis(250))
+        .timeout_connect(Duration::from_millis(100))
+        .timeout_read(Duration::from_millis(100))
+        .timeout_write(Duration::from_millis(100))
         .build();
     let mut i = 0;
+    let attempts = 1;
+
     while i < attempts {
         match agent.delete(url).call() {
             Ok(resp) => {
@@ -72,19 +76,21 @@ fn rpc_delete_with_retry(url: &str, attempts: usize) -> Result<(u16, String), ()
                 eprintln!("RPC DELETE to {} attempt {} failed: {}", url, i + 1, e);
             }
         }
-        sleep(Duration::from_millis(150));
+        sleep(Duration::from_millis(50));
         i += 1;
     }
     Err(())
 }
 
-fn rpc_post_with_retry(url: &str, body: &str, attempts: usize) -> Result<(u16, String), ()> {
+fn rpc_post_with_retry(url: &str, body: &str) -> Result<(u16, String), ()> {
     let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_millis(250))
-        .timeout_read(Duration::from_millis(250))
-        .timeout_write(Duration::from_millis(250))
+        .timeout_connect(Duration::from_millis(100))
+        .timeout_read(Duration::from_millis(100))
+        .timeout_write(Duration::from_millis(100))
         .build();
     let mut i = 0;
+    let attempts = 1;
+
     while i < attempts {
         match agent
             .post(url)
@@ -112,7 +118,7 @@ fn rpc_post_with_retry(url: &str, body: &str, attempts: usize) -> Result<(u16, S
                 eprintln!("RPC POST to {} attempt {} failed: {}", url, i + 1, e);
             }
         }
-        sleep(Duration::from_millis(150));
+        sleep(Duration::from_millis(50));
         i += 1;
     }
     Err(())
@@ -178,7 +184,7 @@ pub fn run_server(server: tiny_http::Server, name: &str, self_addr: String, peer
                         } else {
                             // forward to owner via internal HTTP POST (with retries)
                             let url = format!("http://{}{}/", owner, "");
-                            match rpc_post_with_retry(&url, &body, 6) {
+                            match rpc_post_with_retry(&url, &body) {
                                 Ok((status, text)) => {
                                     let mut response = tiny_http::Response::from_string(text);
                                     response = response.with_status_code(status as u16);
@@ -227,7 +233,7 @@ pub fn run_server(server: tiny_http::Server, name: &str, self_addr: String, peer
                 } else {
                     // RPC GET to owner
                     let url = format!("http://{}/{}", owner, key);
-                    match rpc_get_with_retry(&url, 6) {
+                    match rpc_get_with_retry(&url) {
                         Ok((status, text)) => {
                             if status == 200 {
                                 let mut response = tiny_http::Response::from_string(text);
@@ -265,7 +271,7 @@ pub fn run_server(server: tiny_http::Server, name: &str, self_addr: String, peer
                 } else {
                     // forward delete to owner
                     let url = format!("http://{}/{}", owner, key);
-                    match rpc_delete_with_retry(&url, 6) {
+                    match rpc_delete_with_retry(&url) {
                         Ok((status, text)) => {
                             let mut response = tiny_http::Response::from_string(text);
                             response = response.with_status_code(status as u16);
