@@ -1,19 +1,16 @@
-use serde_json::Value;
 use crate::cache::Cache;
-use std::time::Duration;
+use serde_json::Value;
+use std::sync::Arc;
 use std::thread::sleep;
-#[allow(unused_imports)]  // Needed for .read_to_string() in handle_post
-use std::io::Read;
+use std::time::Duration;
 
-// helper: try GET with retries. Return Ok((status_code, body)) when owner replies or Err(()) on total failure.
-fn rpc_get_with_retry(url: &str) -> Result<(u16, String), ()> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_millis(100))
-        .timeout_read(Duration::from_millis(100))
-        .timeout_write(Duration::from_millis(100))
-        .build();
+// helper: try GET with retries using a shared Agent. Return Ok((status_code, body)) when owner replies or Err(()) on total failure.
+fn rpc_get_with_retry(
+    agent: &ureq::Agent,
+    url: &str,
+    attempts: usize,
+) -> Result<(u16, String), ()> {
     let mut i = 0;
-    let attempts = 1;
 
     while i < attempts {
         match agent.get(url).call() {
@@ -22,7 +19,12 @@ fn rpc_get_with_retry(url: &str) -> Result<(u16, String), ()> {
                 let body = resp.into_string().unwrap_or_default();
                 if status >= 500 {
                     // treat 5xx as transient; retry
-                    eprintln!("RPC GET to {} attempt {} got {} — retrying", url, i + 1, status);
+                    eprintln!(
+                        "RPC GET to {} attempt {} got {} — retrying",
+                        url,
+                        i + 1,
+                        status
+                    );
                 } else {
                     return Ok((status, body));
                 }
@@ -30,7 +32,12 @@ fn rpc_get_with_retry(url: &str) -> Result<(u16, String), ()> {
             Err(ureq::Error::Status(code, resp)) => {
                 let body = resp.into_string().unwrap_or_default();
                 if code >= 500 {
-                    eprintln!("RPC GET to {} attempt {} got {} — retrying", url, i + 1, code);
+                    eprintln!(
+                        "RPC GET to {} attempt {} got {} — retrying",
+                        url,
+                        i + 1,
+                        code
+                    );
                 } else {
                     // forward non-5xx (e.g., 404) immediately
                     return Ok((code as u16, body));
@@ -46,14 +53,12 @@ fn rpc_get_with_retry(url: &str) -> Result<(u16, String), ()> {
     Err(())
 }
 
-fn rpc_delete_with_retry(url: &str) -> Result<(u16, String), ()> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_millis(100))
-        .timeout_read(Duration::from_millis(100))
-        .timeout_write(Duration::from_millis(100))
-        .build();
+fn rpc_delete_with_retry(
+    agent: &ureq::Agent,
+    url: &str,
+    attempts: usize,
+) -> Result<(u16, String), ()> {
     let mut i = 0;
-    let attempts = 1;
 
     while i < attempts {
         match agent.delete(url).call() {
@@ -61,7 +66,12 @@ fn rpc_delete_with_retry(url: &str) -> Result<(u16, String), ()> {
                 let status = resp.status() as u16;
                 let body = resp.into_string().unwrap_or_default();
                 if status >= 500 {
-                    eprintln!("RPC DELETE to {} attempt {} got {} — retrying", url, i + 1, status);
+                    eprintln!(
+                        "RPC DELETE to {} attempt {} got {} — retrying",
+                        url,
+                        i + 1,
+                        status
+                    );
                 } else {
                     return Ok((status, body));
                 }
@@ -69,7 +79,12 @@ fn rpc_delete_with_retry(url: &str) -> Result<(u16, String), ()> {
             Err(ureq::Error::Status(code, resp)) => {
                 let body = resp.into_string().unwrap_or_default();
                 if code >= 500 {
-                    eprintln!("RPC DELETE to {} attempt {} got {} — retrying", url, i + 1, code);
+                    eprintln!(
+                        "RPC DELETE to {} attempt {} got {} — retrying",
+                        url,
+                        i + 1,
+                        code
+                    );
                 } else {
                     return Ok((code as u16, body));
                 }
@@ -84,14 +99,13 @@ fn rpc_delete_with_retry(url: &str) -> Result<(u16, String), ()> {
     Err(())
 }
 
-fn rpc_post_with_retry(url: &str, body: &str) -> Result<(u16, String), ()> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_millis(100))
-        .timeout_read(Duration::from_millis(100))
-        .timeout_write(Duration::from_millis(100))
-        .build();
+fn rpc_post_with_retry(
+    agent: &ureq::Agent,
+    url: &str,
+    body: &str,
+    attempts: usize,
+) -> Result<(u16, String), ()> {
     let mut i = 0;
-    let attempts = 1;
 
     while i < attempts {
         match agent
@@ -103,7 +117,12 @@ fn rpc_post_with_retry(url: &str, body: &str) -> Result<(u16, String), ()> {
                 let status = resp.status() as u16;
                 let body = resp.into_string().unwrap_or_default();
                 if status >= 500 {
-                    eprintln!("RPC POST to {} attempt {} got {} — retrying", url, i + 1, status);
+                    eprintln!(
+                        "RPC POST to {} attempt {} got {} — retrying",
+                        url,
+                        i + 1,
+                        status
+                    );
                 } else {
                     return Ok((status, body));
                 }
@@ -111,7 +130,12 @@ fn rpc_post_with_retry(url: &str, body: &str) -> Result<(u16, String), ()> {
             Err(ureq::Error::Status(code, resp)) => {
                 let body = resp.into_string().unwrap_or_default();
                 if code >= 500 {
-                    eprintln!("RPC POST to {} attempt {} got {} — retrying", url, i + 1, code);
+                    eprintln!(
+                        "RPC POST to {} attempt {} got {} — retrying",
+                        url,
+                        i + 1,
+                        code
+                    );
                 } else {
                     return Ok((code as u16, body));
                 }
@@ -145,7 +169,10 @@ fn owner_for_key(key: &str, peers: &[String]) -> usize {
 fn json_response(status: u16, body: String) -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {
     tiny_http::Response::from_string(body)
         .with_status_code(status)
-        .with_header(tiny_http::Header::from_bytes(b"Content-Type", b"application/json; charset=utf-8").unwrap())
+        .with_header(
+            tiny_http::Header::from_bytes(b"Content-Type", b"application/json; charset=utf-8")
+                .unwrap(),
+        )
 }
 
 /// Handle POST / - write/update cache
@@ -155,9 +182,10 @@ fn handle_post(
     self_addr: &str,
     peers: &[String],
     store: &Cache,
+    agent: &ureq::Agent,
 ) {
-    let mut req = req;  // Mutable needed for as_reader()
-    
+    let mut req = req; // Mutable needed for as_reader()
+
     // Read request body
     let mut body = String::new();
     if let Err(e) = req.as_reader().read_to_string(&mut body) {
@@ -193,7 +221,7 @@ fn handle_post(
     } else {
         // Forward to owner
         let url = format!("http://{}/", owner);
-        match rpc_post_with_retry(&url, &body) {
+        match rpc_post_with_retry(agent, &url, &body, 1) {
             Ok((status, text)) => {
                 let _ = req.respond(json_response(status, text));
             }
@@ -213,6 +241,7 @@ fn handle_get(
     peers: &[String],
     store: &Cache,
     key: &str,
+    agent: &ureq::Agent,
 ) {
     if key.is_empty() {
         let _ = req.respond(tiny_http::Response::empty(400));
@@ -233,7 +262,7 @@ fn handle_get(
     } else {
         // Forward to owner
         let url = format!("http://{}/{}", owner, key);
-        match rpc_get_with_retry(&url) {
+        match rpc_get_with_retry(agent, &url, 1) {
             Ok((200, text)) => {
                 let _ = req.respond(json_response(200, text));
             }
@@ -254,6 +283,7 @@ fn handle_delete(
     peers: &[String],
     store: &Cache,
     key: &str,
+    agent: &ureq::Agent,
 ) {
     if key.is_empty() {
         let _ = req.respond(tiny_http::Response::empty(400));
@@ -270,7 +300,7 @@ fn handle_delete(
     } else {
         // Forward to owner
         let url = format!("http://{}/{}", owner, key);
-        match rpc_delete_with_retry(&url) {
+        match rpc_delete_with_retry(agent, &url, 1) {
             Ok((status, text)) => {
                 let _ = req.respond(json_response(status, text));
             }
@@ -289,9 +319,23 @@ fn handle_health(req: tiny_http::Request) {
 
 /// Run the server loop. `name` is the server name (for logs), `peers` is the ordered list of peer base URLs
 /// (including self) used for owner selection and internal RPC. `store` is the in-memory key-value store.
-pub fn run_server(server: tiny_http::Server, name: &str, self_addr: String, peers: Vec<String>, store: Cache) {
+pub fn run_server(
+    server: tiny_http::Server,
+    name: &str,
+    self_addr: String,
+    peers: Vec<String>,
+    store: Cache,
+) {
     println!("{} running on {} with peers: {:?}", name, self_addr, peers);
-    
+    // Build a shared HTTP Agent for connection pooling and lower latency.
+    let agent = Arc::new(
+        ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_millis(100))
+            .timeout_read(Duration::from_millis(100))
+            .timeout_write(Duration::from_millis(100))
+            .build(),
+    );
+
     for request in server.incoming_requests() {
         let method = request.method().as_str().to_string();
         let url = request.url().to_string();
@@ -299,23 +343,40 @@ pub fn run_server(server: tiny_http::Server, name: &str, self_addr: String, peer
         let store = store.clone();
         let name = name.to_string();
         let self_addr = self_addr.clone();
-        
+        let agent = agent.clone();
+
         std::thread::spawn(move || {
             // Route request to appropriate handler
             match (method.as_str(), url.as_str()) {
                 ("POST", "/") => {
-                    handle_post(request, &name, &self_addr, &peers, &store);
+                    handle_post(request, &name, &self_addr, &peers, &store, agent.as_ref());
                 }
                 ("GET", "/health") => {
                     handle_health(request);
                 }
                 ("GET", path) => {
                     let key = path.trim_start_matches('/');
-                    handle_get(request, &name, &self_addr, &peers, &store, key);
+                    handle_get(
+                        request,
+                        &name,
+                        &self_addr,
+                        &peers,
+                        &store,
+                        key,
+                        agent.as_ref(),
+                    );
                 }
                 ("DELETE", path) => {
                     let key = path.trim_start_matches('/');
-                    handle_delete(request, &name, &self_addr, &peers, &store, key);
+                    handle_delete(
+                        request,
+                        &name,
+                        &self_addr,
+                        &peers,
+                        &store,
+                        key,
+                        agent.as_ref(),
+                    );
                 }
                 _ => {
                     let _ = request.respond(tiny_http::Response::empty(405));
